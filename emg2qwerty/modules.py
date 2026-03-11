@@ -278,3 +278,51 @@ class TDSConvEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
+
+
+class LSTMEncoder(nn.Module):
+    """A bidirectional LSTM encoder that serves as a drop-in replacement
+    for ``TDSConvEncoder``.
+
+    Takes inputs of shape (T, N, num_features) and returns outputs of the
+    same shape (T, N, num_features). Unlike ``TDSConvEncoder``, the LSTM
+    preserves the full temporal sequence length (T_in == T_out).
+
+    Args:
+        num_features (int): ``num_features`` for an input of shape
+            (T, N, num_features).
+        hidden_size (int): Number of features in the LSTM hidden state.
+            (default: 512)
+        num_layers (int): Number of stacked LSTM layers. (default: 3)
+        dropout (float): Dropout probability between LSTM layers.
+            (default: 0.3)
+    """
+
+    def __init__(
+        self,
+        num_features: int,
+        hidden_size: int = 512,
+        num_layers: int = 3,
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+
+        self.lstm = nn.LSTM(
+            input_size=num_features,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0,
+            bidirectional=True,
+            batch_first=False,  # Input is (T, N, features)
+        )
+
+        # Project from 2 * hidden_size (bidirectional) back to num_features
+        self.projection = nn.Linear(2 * hidden_size, num_features)
+        self.layer_norm = nn.LayerNorm(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        # inputs: (T, N, num_features)
+        output, _ = self.lstm(inputs)  # (T, N, 2 * hidden_size)
+        output = self.projection(output)  # (T, N, num_features)
+        output = output + inputs  # Residual connection
+        return self.layer_norm(output)  # (T, N, num_features)
